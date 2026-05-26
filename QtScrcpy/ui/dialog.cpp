@@ -900,3 +900,123 @@ void Dialog::showPortEditMenu(const QPoint &pos)
     menu->exec(ui->devicePortEdt->lineEdit()->mapToGlobal(pos));
     delete menu;
 }
+
+void Dialog::setupPhoneWallMode()
+{
+    if (m_phoneWallMode) {
+        return;
+    }
+    
+    m_phoneWallMode = true;
+    m_mainStack->setCurrentIndex(1);
+    
+    // Hide classic UI elements
+    ui->usbConnectBtn->hide();
+    ui->wifiConnectBtn->hide();
+    ui->stopAllServerBtn->hide();
+    ui->connectedPhoneList->hide();
+    ui->updateDevice->hide();
+    ui->serialBox->hide();
+    ui->getIPBtn->hide();
+    ui->deviceIpEdt->hide();
+    ui->devicePortEdt->hide();
+    ui->wirelessConnectBtn->hide();
+    ui->startAdbdBtn->hide();
+    ui->wirelessDisConnectBtn->hide();
+    ui->useSingleModeCheck->hide();
+    ui->recordScreenCheck->hide();
+    ui->selectRecordPathBtn->hide();
+    ui->recordPathEdt->hide();
+    ui->bitRateEdit->hide();
+    ui->maxSizeBox->hide();
+    ui->lockOrientationBox->hide();
+    ui->gameBox->hide();
+    ui->applyScriptBtn->hide();
+    ui->refreshGameScriptBtn->hide();
+    ui->adbCommandEdt->hide();
+    ui->adbCommandBtn->hide();
+    ui->stopAdbBtn->hide();
+    ui->outEdit->hide();
+    ui->clearOut->hide();
+    ui->startAudioBtn->hide();
+    ui->stopAudioBtn->hide();
+    ui->installSndcpyBtn->hide();
+    ui->updateNameBtn->hide();
+    ui->autoUpdatecheckBox->hide();
+    
+    // Show phone wall
+    m_phoneWall->setVisible(true);
+}
+
+void Dialog::setupClassicMode()
+{
+    if (!m_phoneWallMode) {
+        return;
+    }
+    
+    m_phoneWallMode = false;
+    m_mainStack->setCurrentIndex(0);
+    
+    // Show all classic UI elements
+    ui->usbConnectBtn->show();
+    ui->wifiConnectBtn->show();
+    ui->stopAllServerBtn->show();
+    ui->connectedPhoneList->show();
+    ui->updateDevice->show();
+    ui->serialBox->show();
+    ui->getIPBtn->show();
+    ui->deviceIpEdt->show();
+    ui->devicePortEdt->show();
+    ui->wirelessConnectBtn->show();
+    ui->startAdbdBtn->show();
+    ui->wirelessDisConnectBtn->show();
+    ui->useSingleModeCheck->show();
+    ui->recordScreenCheck->show();
+    ui->selectRecordPathBtn->show();
+    ui->recordPathEdt->show();
+    ui->bitRateEdit->show();
+    ui->maxSizeBox->show();
+    ui->lockOrientationBox->show();
+    ui->gameBox->show();
+    ui->applyScriptBtn->show();
+    ui->refreshGameScriptBtn->show();
+    ui->adbCommandEdt->show();
+    ui->adbCommandBtn->show();
+    ui->stopAdbBtn->show();
+    ui->outEdit->show();
+    ui->clearOut->show();
+    ui->startAudioBtn->show();
+    ui->stopAudioBtn->show();
+    ui->installSndcpyBtn->show();
+    ui->updateNameBtn->show();
+    ui->autoUpdatecheckBox->show();
+    
+    // Hide phone wall
+    m_phoneWall->setVisible(false);
+}
+
+void Dialog::onDeviceClicked(int deviceId)
+{
+    outLog(QString("Device %1 clicked").arg(deviceId));
+}
+
+void Dialog::onDeviceDoubleClicked(int deviceId)
+{
+    outLog(QString("Double-clicked Device %1 - connecting...").arg(deviceId));
+    
+    if (ui->serialBox->count() >= deviceId) {
+        ui->serialBox->setCurrentIndex(deviceId - 1);
+        on_startServerBtn_clicked();
+    } else {
+        outLog(QString("Device %1 not found in device list").arg(deviceId));
+    }
+}
+
+void Dialog::onToggleModeBtn_clicked()
+{
+    if (m_phoneWallMode) {
+        setupClassicMode();
+    } else {
+        setupPhoneWallMode();
+    }
+}

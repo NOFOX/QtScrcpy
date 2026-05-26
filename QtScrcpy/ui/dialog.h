@@ -8,11 +8,13 @@
 #include <QSystemTrayIcon>
 #include <QListWidget>
 #include <QTimer>
+#include <QStackedWidget>
 
 
 #include "adbprocess.h"
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
 #include "audio/audiooutput.h"
+#include "phonewall.h"
 
 namespace Ui
 {
@@ -69,6 +71,10 @@ private slots:
 
     void showIpEditMenu(const QPoint &pos);
 
+    void onDeviceClicked(int deviceId);
+    void onDeviceDoubleClicked(int deviceId);
+    void onToggleModeBtn_clicked();
+
 private:
     bool checkAdbRun();
     void initUI();
@@ -87,6 +93,9 @@ private:
 
     void showPortEditMenu(const QPoint &pos);
 
+    void setupPhoneWallMode();
+    void setupClassicMode();
+
 protected:
     void closeEvent(QCloseEvent *event);
 
@@ -99,6 +108,10 @@ private:
     QAction *m_quit;
     AudioOutput m_audioOutput;
     QTimer m_autoUpdatetimer;
+    
+    PhoneWall *m_phoneWall;
+    QStackedWidget *m_mainStack;
+    bool m_phoneWallMode;
 };
 
 #endif // DIALOG_H
