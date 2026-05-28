@@ -433,9 +433,10 @@ void VideoForm::setEmbeddedMode(bool embedded)
         setWindowFlags(Qt::Widget);
         
         // Reset size constraints to prevent slot widening
+        // Use Ignored to tell the layout system to ignore sizeHint()
         setMinimumSize(0, 0);
         setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     } else {
         // Restore size constraints for normal mode
         setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);

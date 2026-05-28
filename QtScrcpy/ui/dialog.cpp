@@ -376,7 +376,6 @@ void Dialog::updatePhoneSlot(int index, const QString &serial, const QString &de
         
         // Force a tiny size so the layout isn't pushed wide by the previous large size
         vf->resize(10, 10);
-        vf->setMaximumSize(frame->size()); // Limit to current slot size
         
         // Ensure clean event filter state
         vf->removeEventFilter(this);
