@@ -158,6 +158,8 @@ private:
 
     // Sidebar
     QWidget *m_sidePanel = nullptr;
+    QLabel *m_sideTitleLabel = nullptr;
+    QLabel *m_wallTitleLabel = nullptr;
     QPushButton *m_expandBtn = nullptr;
     QTreeWidget *m_deviceTree = nullptr;
     QLineEdit *m_filterEdit = nullptr;

@@ -220,6 +220,7 @@ void Dialog::initUI()
 {
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowFlags(Qt::FramelessWindowHint | Qt::WindowMinMaxButtonsHint);
+    setStyleSheet("background-color: #1a1a28; color: #e0e0e0;");
 
     // Remove margins for the main layout to let phone wall take full space
     if (layout()) {
@@ -305,8 +306,9 @@ void Dialog::createSidebar()
     mainLayout->setSpacing(10);
 
     // --- Part A: Device Management ---
-    auto *deviceGroup = new QGroupBox(tr("Device Management"));
-    deviceGroup->setStyleSheet("color: #e0e0e0; font-weight: bold;");
+    auto *deviceGroup = new QGroupBox();
+    deviceGroup->setObjectName("deviceGroup");
+    deviceGroup->setStyleSheet("QGroupBox#deviceGroup { border: none; }");
     auto *devLayout = new QVBoxLayout(deviceGroup);
 
     // Filter
@@ -376,63 +378,40 @@ void Dialog::createPhoneWall()
         child->hide();
     }
 
-    // If rightWidget already has a layout, we'll just add our new structure to it
-    // or replace it if it's not a QHBoxLayout
+    // Replace existing layout with a vertical layout for global header
     QLayout *existingLayout = ui->rightWidget->layout();
-    QHBoxLayout *mainHorizontalLayout = qobject_cast<QHBoxLayout*>(existingLayout);
-    
-    if (!mainHorizontalLayout) {
-        if (existingLayout) {
-            // Remove existing layout but DON'T delete the widgets it managed (they are hidden)
-            delete existingLayout;
-        }
-        mainHorizontalLayout = new QHBoxLayout(ui->rightWidget);
-        mainHorizontalLayout->setContentsMargins(0, 0, 0, 0);
-        mainHorizontalLayout->setSpacing(0);
-    } else {
-        // Clear existing items from the layout
-        QLayoutItem *item;
-        while ((item = mainHorizontalLayout->takeAt(0)) != nullptr) {
-            delete item;
-        }
+    if (existingLayout) {
+        delete existingLayout;
     }
+    
+    auto *mainVerticalLayout = new QVBoxLayout(ui->rightWidget);
+    mainVerticalLayout->setContentsMargins(0, 0, 0, 0);
+    mainVerticalLayout->setSpacing(0);
 
     m_phoneSlotWidgets.clear();
 
-    // Create Sidebar
+    // Create Sidebar (we create it first so we can check its state)
     createSidebar();
-    mainHorizontalLayout->addWidget(m_sidePanel, 1);
 
-    // Create Toggle Button
-    m_expandBtn = new QPushButton(">");
-    m_expandBtn->setFixedSize(20, 60);
-    m_expandBtn->setStyleSheet("QPushButton { background: #2a2a38; color: #ff6b6b; border: 1px solid #3a3a48; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }"
-                              "QPushButton:hover { background: #3a3a48; }");
-    connect(m_expandBtn, &QPushButton::clicked, this, &Dialog::onToggleSidebar);
-    mainHorizontalLayout->addWidget(m_expandBtn, 0, Qt::AlignVCenter);
-
-    // Phone Wall Group Box
-    m_phoneWallGroupBox = new QGroupBox(tr("Phone Wall"));
-    m_phoneWallGroupBox->setObjectName("phoneWallGroupBox");
-    m_phoneWallGroupBox->setMinimumHeight(250);
-    m_phoneWallGroupBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    mainHorizontalLayout->addWidget(m_phoneWallGroupBox, 4); // Stretch factor 4
-    
-    auto *wrapperLayout = new QVBoxLayout(m_phoneWallGroupBox);
-    wrapperLayout->setContentsMargins(8, 8, 8, 8);
-    wrapperLayout->setSpacing(6);
-
-    // --- Custom Title Bar Row ---
+    // --- Global Title Bar Row ---
     m_titleBar = new QWidget();
-    m_titleBar->setFixedHeight(30);
-    m_titleBar->setStyleSheet("background: transparent;");
+    m_titleBar->setFixedHeight(40);
+    m_titleBar->setStyleSheet("background: #1a1a28; border-bottom: 1px solid #2a2a38;");
     auto *titleLayout = new QHBoxLayout(m_titleBar);
-    titleLayout->setContentsMargins(0, 0, 0, 0);
-    titleLayout->setSpacing(10);
+    titleLayout->setContentsMargins(0, 0, 10, 0);
+    titleLayout->setSpacing(0);
 
-    auto *titleLabel = new QLabel(tr("Phone Wall"));
-    titleLabel->setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 14px;");
-    titleLayout->addWidget(titleLabel);
+    // Sidebar Title
+    m_sideTitleLabel = new QLabel(tr("Device Management"));
+    m_sideTitleLabel->setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 14px; padding-left: 15px; border-right: 1px solid #2a2a38;");
+    m_sideTitleLabel->setFixedWidth(280); // Give it a reasonable fixed width to align with sidebar
+    m_sideTitleLabel->setVisible(!m_sidePanel->isHidden());
+    titleLayout->addWidget(m_sideTitleLabel);
+
+    // Wall Title
+    m_wallTitleLabel = new QLabel(tr("Phone Wall"));
+    m_wallTitleLabel->setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 14px; padding-left: 15px;");
+    titleLayout->addWidget(m_wallTitleLabel);
     titleLayout->addStretch();
 
     // Minimize Button
@@ -460,8 +439,36 @@ void Dialog::createPhoneWall()
     titleLayout->addWidget(closeBtn);
 
     m_titleBar->installEventFilter(this);
-    wrapperLayout->addWidget(m_titleBar);
-    m_phoneWallGroupBox->setTitle(""); // Remove default title text since we have custom one
+    mainVerticalLayout->addWidget(m_titleBar);
+
+    // --- Content Row ---
+    auto *contentHorizontalLayout = new QHBoxLayout();
+    contentHorizontalLayout->setContentsMargins(0, 0, 0, 0);
+    contentHorizontalLayout->setSpacing(0);
+    mainVerticalLayout->addLayout(contentHorizontalLayout, 1);
+
+    // Add Sidebar to content
+    m_sidePanel->setFixedWidth(280); // Match title width
+    contentHorizontalLayout->addWidget(m_sidePanel);
+
+    // Create Toggle Button
+    m_expandBtn = new QPushButton(">");
+    m_expandBtn->setFixedSize(20, 60);
+    m_expandBtn->setStyleSheet("QPushButton { background: #2a2a38; color: #ff6b6b; border: 1px solid #3a3a48; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }"
+                              "QPushButton:hover { background: #3a3a48; }");
+    connect(m_expandBtn, &QPushButton::clicked, this, &Dialog::onToggleSidebar);
+    contentHorizontalLayout->addWidget(m_expandBtn, 0, Qt::AlignVCenter);
+
+    // Phone Wall Group Box (Container for the grid)
+    m_phoneWallGroupBox = new QGroupBox();
+    m_phoneWallGroupBox->setObjectName("phoneWallGroupBox");
+    m_phoneWallGroupBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_phoneWallGroupBox->setStyleSheet("QGroupBox#phoneWallGroupBox { border: none; background-color: #1a1a28; }");
+    contentHorizontalLayout->addWidget(m_phoneWallGroupBox, 1);
+    
+    auto *wrapperLayout = new QVBoxLayout(m_phoneWallGroupBox);
+    wrapperLayout->setContentsMargins(0, 0, 0, 0);
+    wrapperLayout->setSpacing(0);
 
     // 创建滚动区域
     auto *scrollArea = new QScrollArea();
@@ -469,12 +476,17 @@ void Dialog::createPhoneWall()
     scrollArea->setFrameShape(QFrame::NoFrame);
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scrollArea->setStyleSheet("QScrollArea { background-color: #1a1a28; border: none; }"
+                             "QScrollBar:vertical { background: #1a1a28; width: 10px; margin: 0px; }"
+                             "QScrollBar::handle:vertical { background: #3a3a48; min-height: 20px; border-radius: 5px; }"
+                             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }");
 
     // 创建手机墙容器
     m_phoneWallContainer = new QWidget();
+    m_phoneWallContainer->setStyleSheet("background-color: #1a1a28;");
     m_phoneWallGrid = new QGridLayout(m_phoneWallContainer);
-    m_phoneWallGrid->setSpacing(8);
-    m_phoneWallGrid->setContentsMargins(4, 4, 4, 4);
+    m_phoneWallGrid->setSpacing(10);
+    m_phoneWallGrid->setContentsMargins(10, 10, 10, 10);
 
     // 强制设置8列等宽
     for (int i = 0; i < 8; ++i) {
@@ -494,20 +506,21 @@ void Dialog::createPhoneWall()
         slotFrame->setStyleSheet(
             "QFrame {"
             "background: #16161e;"
-            "border: 2px solid #222230;"
-            "border-radius: 0px;"
+            "border: 1px solid #2a2a38;"
+            "border-radius: 4px;"
             "}"
             "QFrame:hover {"
             "border-color: #ff6b6b;"
+            "background: #1c1c26;"
             "}");
         
         auto *slotLayout = new QVBoxLayout(slotFrame);
-        slotLayout->setContentsMargins(2, 2, 2, 2);
+        slotLayout->setContentsMargins(0, 0, 0, 0);
         slotLayout->setSpacing(0);
         
         auto *statusLabel = new QLabel(tr("Empty slot %1").arg(i + 1));
         statusLabel->setAlignment(Qt::AlignCenter);
-        statusLabel->setStyleSheet("color: #555; font-size: 10px;");
+        statusLabel->setStyleSheet("color: #444; font-size: 11px; font-weight: bold;");
         slotLayout->addWidget(statusLabel);
         
         slotFrame->setProperty("slotIndex", i);
@@ -530,9 +543,11 @@ void Dialog::onToggleSidebar()
 {
     if (m_sidePanel->isHidden()) {
         m_sidePanel->show();
+        m_sideTitleLabel->show();
         m_expandBtn->setText("<");
     } else {
         m_sidePanel->hide();
+        m_sideTitleLabel->hide();
         m_expandBtn->setText(">");
     }
 }
@@ -602,17 +617,18 @@ void Dialog::onDeviceTreeDoubleClicked(QTreeWidgetItem *item, int column)
         // Highlight or scroll to slot
         auto *frame = m_phoneSlotWidgets[slotIndex];
         frame->setFocus();
-        frame->setStyleSheet(frame->styleSheet() + "border-color: #ff6b6b; border-width: 4px;");
+        frame->setStyleSheet(frame->styleSheet() + "border-color: #ff6b6b; border-width: 2px; background: #1c1c26;");
         QTimer::singleShot(1000, this, [this, slotIndex]() {
             if (slotIndex < m_phoneSlotWidgets.size()) {
                 m_phoneSlotWidgets[slotIndex]->setStyleSheet(
                     "QFrame {"
                     "background: #16161e;"
-                    "border: 2px solid #222230;"
-                    "border-radius: 0px;"
+                    "border: 1px solid #2a2a38;"
+                    "border-radius: 4px;"
                     "}"
                     "QFrame:hover {"
                     "border-color: #ff6b6b;"
+                    "background: #1c1c26;"
                     "}");
             }
         });
@@ -815,7 +831,7 @@ void Dialog::updatePhoneSlot(int index, const QString &serial, const QString &de
     } else {
         auto *statusLabel = new QLabel(online ? deviceName : tr("Offline: %1").arg(serial));
         statusLabel->setAlignment(Qt::AlignCenter);
-        statusLabel->setStyleSheet(online ? "color: #4caf50; font-size: 10px;" : "color: #f44336; font-size: 10px;");
+        statusLabel->setStyleSheet(online ? "color: #4caf50; font-size: 11px; font-weight: bold;" : "color: #f44336; font-size: 11px; font-weight: bold;");
         layout->addWidget(statusLabel);
     }
 }
@@ -840,7 +856,7 @@ void Dialog::clearPhoneSlot(int index)
     
     auto *statusLabel = new QLabel(tr("Empty slot %1").arg(index + 1));
     statusLabel->setAlignment(Qt::AlignCenter);
-    statusLabel->setStyleSheet("color: #555; font-size: 10px;");
+    statusLabel->setStyleSheet("color: #444; font-size: 11px; font-weight: bold;");
     layout->addWidget(statusLabel);
 }
 
