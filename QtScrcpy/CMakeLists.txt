@@ -181,8 +181,6 @@ set(QC_UI_SOURCES
     ui/dialog.ui
     render/qyuvopenglwidget.h
     render/qyuvopenglwidget.cpp
-    ui/phonewall.h
-    ui/phonewall.cpp
 )
 source_group(ui FILES ${QC_UI_SOURCES})
 
