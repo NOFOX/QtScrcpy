@@ -1,10 +1,20 @@
-﻿#include <QDebug>
+#include <QDebug>
 #include <QFile>
 #include <QFileDialog>
 #include <QKeyEvent>
 #include <QRandomGenerator>
 #include <QTime>
 #include <QTimer>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QComboBox>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QVBoxLayout>
 
 #include "config.h"
 #include "dialog.h"
@@ -37,7 +47,6 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
 
     updateBootConfig(true);
 
-    on_useSingleModeCheck_clicked();
     on_updateDevice_clicked();
 
     connect(&m_autoUpdatetimer, &QTimer::timeout, this, &Dialog::on_updateDevice_clicked);
@@ -75,6 +84,12 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
                 for (auto &item : devices) {
                     ui->serialBox->addItem(item);
                     ui->connectedPhoneList->addItem(Config::getInstance().getNickName(item) + "-" + item);
+                    
+                    // Auto-start mirroring if not already connected
+                    if (!qsc::IDeviceManage::getInstance().getDevice(item)) {
+                        ui->serialBox->setCurrentText(item);
+                        on_startServerBtn_clicked();
+                    }
                 }
             } else if (args.contains("show") && args.contains("wlan0")) {
                 QString ip = m_adb.getDeviceIPFromStdOut();
@@ -138,7 +153,12 @@ Dialog::~Dialog()
 void Dialog::initUI()
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    //setWindowFlags(windowFlags() | Qt::WindowMinimizeButtonHint | Qt::WindowCloseButtonHint | Qt::CustomizeWindowHint);
+    
+    // Remove margins for the main layout to let phone wall take full space
+    if (layout()) {
+        layout()->setContentsMargins(0, 0, 0, 0);
+        layout()->setSpacing(0);
+    }
 
     setWindowTitle(Config::getInstance().getTitle());
 #ifdef Q_OS_LINUX
@@ -191,6 +211,324 @@ void Dialog::initUI()
         connect(ui->devicePortEdt->lineEdit(), &QWidget::customContextMenuRequested,
                 this, &Dialog::showPortEditMenu);
     }
+
+    // Adjust UI to only show Phone Wall
+    ui->leftWidget->hide();
+    ui->configGroupBox->hide();
+    ui->usbGroupBox->hide();
+    ui->wirelessGroupBox->hide();
+    
+    // Maximize window
+    showMaximized();
+
+    // Create the phone wall grid for multi-device control
+    m_phoneSlotSerials = QVector<QString>(24);
+    createPhoneWall();
+}
+
+void Dialog::createPhoneWall()
+{
+    if (!ui || !ui->rightWidget) {
+        qWarning() << "createPhoneWall: ui or rightWidget is null";
+        return;
+    }
+
+    // 获取或创建rightWidget的布局
+    QBoxLayout *rightLayout = qobject_cast<QVBoxLayout *>(ui->rightWidget->layout());
+    if (!rightLayout) {
+        qWarning() << "rightWidget has no layout or wrong type, creating new QVBoxLayout";
+        rightLayout = new QVBoxLayout(ui->rightWidget);
+        ui->rightWidget->setLayout(rightLayout);
+    }
+
+    m_phoneWallGroupBox = new QGroupBox(tr("Phone Wall"));
+    m_phoneWallGroupBox->setObjectName("phoneWallGroupBox");
+    m_phoneWallGroupBox->setMinimumHeight(250);
+    // Remove maximum height to allow it to fill the maximized window
+    m_phoneWallGroupBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    
+    auto *wrapperLayout = new QVBoxLayout(m_phoneWallGroupBox);
+    wrapperLayout->setContentsMargins(8, 8, 8, 8);
+    wrapperLayout->setSpacing(6);
+
+    // 创建标题栏 (精简：仅保留标题)
+    auto *header = new QWidget();
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(0, 0, 0, 0);
+    headerLayout->setSpacing(10);
+    
+    auto *brandLabel = new QLabel(tr("PHONES (8x3 Grid)"));
+    brandLabel->setStyleSheet("font-weight: 700; color: #ff6b6b; font-size: 14px;");
+    headerLayout->addWidget(brandLabel);
+    headerLayout->addStretch();
+    wrapperLayout->addWidget(header);
+
+    // 创建滚动区域
+    auto *scrollArea = new QScrollArea();
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    // 创建手机墙容器
+    m_phoneWallContainer = new QWidget();
+    m_phoneWallGrid = new QGridLayout(m_phoneWallContainer);
+    m_phoneWallGrid->setSpacing(8);
+    m_phoneWallGrid->setContentsMargins(4, 4, 4, 4);
+
+    // 强制设置8列等宽，防止某个槽位变宽撑开布局
+    for (int i = 0; i < 8; ++i) {
+        m_phoneWallGrid->setColumnStretch(i, 1);
+        m_phoneWallGrid->setColumnMinimumWidth(i, 0);
+    }
+    for (int i = 0; i < 3; ++i) {
+        m_phoneWallGrid->setRowStretch(i, 1);
+    }
+
+    // 创建24个固定槽位 (8x3)
+    for (int i = 0; i < 24; ++i) {
+        auto *slotFrame = new QFrame();
+        slotFrame->setObjectName(QStringLiteral("phoneSlot%1").arg(i));
+        slotFrame->setMinimumHeight(150); // 增加高度以容纳预览
+        slotFrame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        slotFrame->setStyleSheet(
+            "QFrame {"
+            "background: #16161e;"
+            "border: 2px solid #222230;"
+            "border-radius: 0px;"
+            "}"
+            "QFrame:hover {"
+            "border-color: #ff6b6b;"
+            "}");
+        
+        auto *slotLayout = new QVBoxLayout(slotFrame);
+        slotLayout->setContentsMargins(2, 2, 2, 2);
+        slotLayout->setSpacing(0);
+        
+        auto *statusLabel = new QLabel(tr("Empty slot %1").arg(i + 1));
+        statusLabel->setAlignment(Qt::AlignCenter);
+        statusLabel->setStyleSheet("color: #555; font-size: 10px;");
+        slotLayout->addWidget(statusLabel);
+        
+        slotFrame->setProperty("slotIndex", i);
+        slotFrame->installEventFilter(this); // 用于检测双击
+        
+        m_phoneSlotWidgets.append(slotFrame);
+        m_phoneWallGrid->addWidget(slotFrame, i / 8, i % 8);
+    }
+
+    scrollArea->setWidget(m_phoneWallContainer);
+    wrapperLayout->addWidget(scrollArea, 1);
+
+    // 添加手机墙到右侧面板最顶部
+    rightLayout->insertWidget(0, m_phoneWallGroupBox, 1);
+    
+    m_phoneWallCount = 24;
+}
+
+int Dialog::findPhoneSlot(const QString &serial) const
+{
+    for (int i = 0; i < m_phoneSlotSerials.size(); ++i) {
+        if (m_phoneSlotSerials.at(i) == serial) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int Dialog::findEmptyPhoneSlot() const
+{
+    for (int i = 0; i < m_phoneSlotSerials.size(); ++i) {
+        if (m_phoneSlotSerials.at(i).isEmpty()) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void Dialog::updatePhoneSlot(int index, const QString &serial, const QString &deviceName, bool online)
+{
+    if (index < 0 || index >= m_phoneSlotWidgets.size()) {
+        return;
+    }
+    m_phoneSlotSerials[index] = serial;
+    auto *frame = m_phoneSlotWidgets[index];
+    
+    // 清空现有内容（除了VideoForm，如果有的话）
+    QLayout *layout = frame->layout();
+    QLayoutItem *child;
+    while ((child = layout->takeAt(0)) != nullptr) {
+        if (child->widget()) {
+            // 如果是VideoForm，我们可能需要保留它或者先移除它
+            // 这里我们假设VideoForm会被onDeviceConnected正确处理
+            child->widget()->hide();
+        }
+        delete child;
+    }
+
+    auto device = qsc::IDeviceManage::getInstance().getDevice(serial);
+    if (device && device->getUserData()) {
+        VideoForm *vf = static_cast<VideoForm*>(device->getUserData());
+        
+        vf->hide(); // Hide before changing parent to avoid layout flickering
+        vf->setEmbeddedMode(true);
+        vf->setParent(frame);
+        
+        // Force a tiny size so the layout isn't pushed wide by the previous large size
+        vf->resize(10, 10);
+        vf->setMaximumSize(frame->size()); // Limit to current slot size
+        
+        // Ensure clean event filter state
+        vf->removeEventFilter(this);
+        QList<QWidget*> children = vf->findChildren<QWidget*>();
+        for (QWidget* child : children) {
+            child->removeEventFilter(this);
+        }
+        
+        // Install filters to catch double-clicks on the video area
+        vf->installEventFilter(this);
+        for (QWidget* child : children) {
+            child->installEventFilter(this);
+        }
+        
+        layout->addWidget(vf);
+        vf->show();
+        
+        // Final layout nudge
+        if (m_phoneWallGrid) {
+            m_phoneWallGrid->activate();
+        }
+    } else {
+        auto *statusLabel = new QLabel(online ? deviceName : tr("Offline: %1").arg(serial));
+        statusLabel->setAlignment(Qt::AlignCenter);
+        statusLabel->setStyleSheet(online ? "color: #4caf50; font-size: 10px;" : "color: #f44336; font-size: 10px;");
+        layout->addWidget(statusLabel);
+    }
+}
+
+void Dialog::clearPhoneSlot(int index)
+{
+    if (index < 0 || index >= m_phoneSlotWidgets.size()) {
+        return;
+    }
+    m_phoneSlotSerials[index].clear();
+    auto *frame = m_phoneSlotWidgets[index];
+    
+    QLayout *layout = frame->layout();
+    QLayoutItem *child;
+    while ((child = layout->takeAt(0)) != nullptr) {
+        if (child->widget()) {
+            child->widget()->hide();
+            // 如果是VideoForm，不要在这里delete，由VideoForm自己管理生命周期
+        }
+        delete child;
+    }
+    
+    auto *statusLabel = new QLabel(tr("Empty slot %1").arg(index + 1));
+    statusLabel->setAlignment(Qt::AlignCenter);
+    statusLabel->setStyleSheet("color: #555; font-size: 10px;");
+    layout->addWidget(statusLabel);
+}
+
+void Dialog::refreshPhoneWallSlots()
+{
+    // 始终显示24个
+    for (int i = 0; i < m_phoneSlotWidgets.size(); ++i) {
+        m_phoneSlotWidgets[i]->setVisible(true);
+    }
+}
+
+void Dialog::onPhoneWallCountChanged(const QString &count)
+{
+    Q_UNUSED(count);
+    m_phoneWallCount = 24;
+    refreshPhoneWallSlots();
+}
+
+bool Dialog::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        VideoForm *vf = qobject_cast<VideoForm*>(watched);
+        if (!vf) {
+            // Check if the watched object is a child of a VideoForm
+            QWidget *w = qobject_cast<QWidget*>(watched);
+            while (w) {
+                vf = qobject_cast<VideoForm*>(w);
+                if (vf) break;
+                w = w->parentWidget();
+            }
+        }
+        
+        QFrame *slotFrame = qobject_cast<QFrame*>(watched);
+        
+        QString serial;
+        if (vf) {
+            serial = vf->getSerial();
+        } else if (slotFrame && slotFrame->objectName().startsWith("phoneSlot")) {
+            int slotIndex = slotFrame->property("slotIndex").toInt();
+            if (slotIndex >= 0 && slotIndex < m_phoneSlotSerials.size()) {
+                serial = m_phoneSlotSerials.at(slotIndex);
+            }
+        }
+
+        if (!serial.isEmpty()) {
+            auto device = qsc::IDeviceManage::getInstance().getDevice(serial);
+            if (device && device->getUserData()) {
+                VideoForm *targetVf = static_cast<VideoForm*>(device->getUserData());
+                
+                // 从槽位中取出，恢复正常显示模式
+                targetVf->setParent(this); // 嵌入到主窗口作为 Overlay
+                targetVf->setWindowFlags(Qt::Widget);
+                targetVf->setEmbeddedMode(false);
+                
+                // 重新安装过滤器
+                targetVf->removeEventFilter(this);
+                QList<QWidget*> children = targetVf->findChildren<QWidget*>();
+                for (QWidget* child : children) {
+                    child->removeEventFilter(this);
+                }
+                targetVf->installEventFilter(this);
+                
+                targetVf->show();
+                
+                // 强制更新大小并居中于 Dialog
+                targetVf->updateShowSize(targetVf->frameSize());
+                
+                QRect dialogRect = this->rect();
+                int x = (dialogRect.width() - targetVf->width()) / 2;
+                int y = (dialogRect.height() - targetVf->height()) / 2;
+                targetVf->move(x, y);
+                
+                targetVf->raise();
+                targetVf->activateWindow();
+                return true;
+            }
+        }
+    } else if (event->type() == QEvent::Close) {
+        VideoForm *vf = qobject_cast<VideoForm*>(watched);
+        if (vf && vf->parentWidget() == this) { // 仅处理作为 Overlay 状态下的关闭
+            QString serial = vf->getSerial();
+            int slotIndex = findPhoneSlot(serial);
+            if (slotIndex >= 0) {
+                // 窗口关闭时，将其重新嵌入到槽位中，并隐藏工具栏
+                event->ignore(); 
+                vf->showToolForm(false);
+                
+                QString name = Config::getInstance().getNickName(serial);
+                if (name.isEmpty()) {
+                    name = Config::getInstance().getTitle();
+                }
+                updatePhoneSlot(slotIndex, serial, name, true);
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void Dialog::onPhoneSlotClicked()
+{
+    // 这个函数现在可以为空，或者用于处理单击选中状态
 }
 
 void Dialog::updateBootConfig(bool toView)
@@ -526,6 +864,17 @@ void Dialog::onDeviceConnected(bool success, const QString &serial, const QStrin
     videoForm->setWindowTitle(name + "-" + serial);
     videoForm->updateShowSize(size);
 
+    if (m_phoneWallGroupBox) {
+        int slotIndex = findPhoneSlot(serial);
+        if (slotIndex < 0) {
+            slotIndex = findEmptyPhoneSlot();
+        }
+        if (slotIndex >= 0) {
+            // 将 VideoForm 嵌入到槽位中显示预览
+            updatePhoneSlot(slotIndex, serial, name, true);
+        }
+    }
+
     bool deviceVer = size.height() > size.width();
     QRect rc = Config::getInstance().getRect(serial);
     bool rcVer = rc.height() > rc.width();
@@ -550,6 +899,12 @@ void Dialog::onDeviceDisconnected(QString serial)
     auto device = qsc::IDeviceManage::getInstance().getDevice(serial);
     if (!device) {
         return;
+    }
+    if (m_phoneWallGroupBox) {
+        int slotIndex = findPhoneSlot(serial);
+        if (slotIndex >= 0) {
+            clearPhoneSlot(slotIndex);
+        }
     }
     auto data = device->getUserData();
     if (data) {
@@ -899,124 +1254,4 @@ void Dialog::showPortEditMenu(const QPoint &pos)
     menu->addAction(clearHistoryAction);
     menu->exec(ui->devicePortEdt->lineEdit()->mapToGlobal(pos));
     delete menu;
-}
-
-void Dialog::setupPhoneWallMode()
-{
-    if (m_phoneWallMode) {
-        return;
-    }
-    
-    m_phoneWallMode = true;
-    m_mainStack->setCurrentIndex(1);
-    
-    // Hide classic UI elements
-    ui->usbConnectBtn->hide();
-    ui->wifiConnectBtn->hide();
-    ui->stopAllServerBtn->hide();
-    ui->connectedPhoneList->hide();
-    ui->updateDevice->hide();
-    ui->serialBox->hide();
-    ui->getIPBtn->hide();
-    ui->deviceIpEdt->hide();
-    ui->devicePortEdt->hide();
-    ui->wirelessConnectBtn->hide();
-    ui->startAdbdBtn->hide();
-    ui->wirelessDisConnectBtn->hide();
-    ui->useSingleModeCheck->hide();
-    ui->recordScreenCheck->hide();
-    ui->selectRecordPathBtn->hide();
-    ui->recordPathEdt->hide();
-    ui->bitRateEdit->hide();
-    ui->maxSizeBox->hide();
-    ui->lockOrientationBox->hide();
-    ui->gameBox->hide();
-    ui->applyScriptBtn->hide();
-    ui->refreshGameScriptBtn->hide();
-    ui->adbCommandEdt->hide();
-    ui->adbCommandBtn->hide();
-    ui->stopAdbBtn->hide();
-    ui->outEdit->hide();
-    ui->clearOut->hide();
-    ui->startAudioBtn->hide();
-    ui->stopAudioBtn->hide();
-    ui->installSndcpyBtn->hide();
-    ui->updateNameBtn->hide();
-    ui->autoUpdatecheckBox->hide();
-    
-    // Show phone wall
-    m_phoneWall->setVisible(true);
-}
-
-void Dialog::setupClassicMode()
-{
-    if (!m_phoneWallMode) {
-        return;
-    }
-    
-    m_phoneWallMode = false;
-    m_mainStack->setCurrentIndex(0);
-    
-    // Show all classic UI elements
-    ui->usbConnectBtn->show();
-    ui->wifiConnectBtn->show();
-    ui->stopAllServerBtn->show();
-    ui->connectedPhoneList->show();
-    ui->updateDevice->show();
-    ui->serialBox->show();
-    ui->getIPBtn->show();
-    ui->deviceIpEdt->show();
-    ui->devicePortEdt->show();
-    ui->wirelessConnectBtn->show();
-    ui->startAdbdBtn->show();
-    ui->wirelessDisConnectBtn->show();
-    ui->useSingleModeCheck->show();
-    ui->recordScreenCheck->show();
-    ui->selectRecordPathBtn->show();
-    ui->recordPathEdt->show();
-    ui->bitRateEdit->show();
-    ui->maxSizeBox->show();
-    ui->lockOrientationBox->show();
-    ui->gameBox->show();
-    ui->applyScriptBtn->show();
-    ui->refreshGameScriptBtn->show();
-    ui->adbCommandEdt->show();
-    ui->adbCommandBtn->show();
-    ui->stopAdbBtn->show();
-    ui->outEdit->show();
-    ui->clearOut->show();
-    ui->startAudioBtn->show();
-    ui->stopAudioBtn->show();
-    ui->installSndcpyBtn->show();
-    ui->updateNameBtn->show();
-    ui->autoUpdatecheckBox->show();
-    
-    // Hide phone wall
-    m_phoneWall->setVisible(false);
-}
-
-void Dialog::onDeviceClicked(int deviceId)
-{
-    outLog(QString("Device %1 clicked").arg(deviceId));
-}
-
-void Dialog::onDeviceDoubleClicked(int deviceId)
-{
-    outLog(QString("Double-clicked Device %1 - connecting...").arg(deviceId));
-    
-    if (ui->serialBox->count() >= deviceId) {
-        ui->serialBox->setCurrentIndex(deviceId - 1);
-        on_startServerBtn_clicked();
-    } else {
-        outLog(QString("Device %1 not found in device list").arg(deviceId));
-    }
-}
-
-void Dialog::onToggleModeBtn_clicked()
-{
-    if (m_phoneWallMode) {
-        setupClassicMode();
-    } else {
-        setupPhoneWallMode();
-    }
 }

@@ -166,18 +166,37 @@ void VideoForm::setSerial(const QString &serial)
     m_serial = serial;
 }
 
+QString VideoForm::getSerial()
+{
+    return m_serial;
+}
+
 void VideoForm::showToolForm(bool show)
 {
     if (!m_toolForm) {
+        if (!show) {
+            return;
+        }
         m_toolForm = new ToolForm(this, ToolForm::AP_OUTSIDE_RIGHT);
         m_toolForm->setSerial(m_serial);
     }
-    m_toolForm->move(pos().x() + geometry().width(), pos().y() + 30);
-    m_toolForm->setVisible(show);
+    
+    if (show) {
+        m_toolForm->setAdsorbEnable(true);
+        m_toolForm->setAdsorbed(true);
+        m_toolForm->move(pos().x() + geometry().width(), pos().y() + 30);
+        m_toolForm->setVisible(true);
+    } else {
+        m_toolForm->setAdsorbEnable(false);
+        m_toolForm->setVisible(false);
+    }
 }
 
 void VideoForm::moveCenter()
 {
+    if (parentWidget()) {
+        return;
+    }
     QRect screenRect = getScreenRect();
     if (screenRect.isEmpty()) {
         qWarning() << "getScreenRect is empty";
@@ -384,33 +403,50 @@ QRect VideoForm::getScreenRect()
 
 void VideoForm::updateStyleSheet(bool vertical)
 {
-    if (vertical) {
-        setStyleSheet(R"(
-                 #videoForm {
-                     border-image: url(:/image/videoform/phone-v.png) 150px 65px 85px 65px;
-                     border-width: 150px 65px 85px 65px;
-                 }
-                 )");
-    } else {
-        setStyleSheet(R"(
-                 #videoForm {
-                     border-image: url(:/image/videoform/phone-h.png) 65px 85px 65px 150px;
-                     border-width: 65px 85px 65px 150px;
-                 }
-                 )");
-    }
+    Q_UNUSED(vertical);
+    // Modern Minimalist style: Square corners and sleek minimal border
+    setStyleSheet(R"(
+             #videoForm {
+                 background-color: #000;
+                 border: 5px solid #1a1a1a;
+                 border-radius: 0px;
+             }
+             )");
     layout()->setContentsMargins(getMargins(vertical));
 }
 
 QMargins VideoForm::getMargins(bool vertical)
 {
-    QMargins margins;
-    if (vertical) {
-        margins = QMargins(10, 68, 12, 62);
+    Q_UNUSED(vertical);
+    // Minimal margins to emphasize full-screen effect
+    return QMargins(8, 8, 8, 8);
+}
+
+void VideoForm::setEmbeddedMode(bool embedded)
+{
+    m_embeddedMode = embedded;
+    if (embedded) {
+        showToolForm(false);
+        setStyleSheet("background: #000; border: none; border-radius: 0px;");
+        layout()->setContentsMargins(0, 0, 0, 0);
+        setAttribute(Qt::WA_TranslucentBackground, false);
+        setWindowFlags(Qt::Widget);
+        
+        // Reset size constraints to prevent slot widening
+        setMinimumSize(0, 0);
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     } else {
-        margins = QMargins(68, 12, 62, 10);
+        // Restore size constraints for normal mode
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        
+        bool vertical = m_widthHeightRatio < 1.0f;
+        updateStyleSheet(vertical);
+        if (m_skin) {
+            setAttribute(Qt::WA_TranslucentBackground);
+            setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+        }
     }
-    return margins;
 }
 
 void VideoForm::updateShowSize(const QSize &newSize)
@@ -420,43 +456,49 @@ void VideoForm::updateShowSize(const QSize &newSize)
 
         m_widthHeightRatio = 1.0f * newSize.width() / newSize.height();
         ui->keepRatioWidget->setWidthHeightRatio(m_widthHeightRatio);
+    }
 
-        bool vertical = m_widthHeightRatio < 1.0f ? true : false;
-        QSize showSize = newSize;
-        QRect screenRect = getScreenRect();
-        if (screenRect.isEmpty()) {
-            qWarning() << "getScreenRect is empty";
-            return;
-        }
-        if (vertical) {
-            showSize.setHeight(qMin(newSize.height(), screenRect.height() - 200));
-            showSize.setWidth(showSize.height() * m_widthHeightRatio);
-        } else {
-            showSize.setWidth(qMin(newSize.width(), screenRect.width() / 2));
-            showSize.setHeight(showSize.width() / m_widthHeightRatio);
-        }
+    if (m_embeddedMode) {
+        return;
+    }
 
-        if (isFullScreen() && qsc::IDeviceManage::getInstance().getDevice(m_serial)) {
-            switchFullScreen();
-        }
+    bool vertical = m_widthHeightRatio < 1.0f ? true : false;
+    QSize showSize = m_frameSize;
+    QRect screenRect = getScreenRect();
+    if (screenRect.isEmpty()) {
+        qWarning() << "getScreenRect is empty";
+        return;
+    }
+    if (vertical) {
+        // Vertical: Use 95% of screen height for maximum visibility
+        showSize.setHeight(qMin(m_frameSize.height(), (int)(screenRect.height() * 0.95)));
+        showSize.setWidth(showSize.height() * m_widthHeightRatio);
+    } else {
+        // Horizontal: Use 90% of screen width
+        showSize.setWidth(qMin(m_frameSize.width(), (int)(screenRect.width() * 0.9)));
+        showSize.setHeight(showSize.width() / m_widthHeightRatio);
+    }
 
-        if (isMaximized()) {
-            showNormal();
-        }
+    if (isFullScreen() && qsc::IDeviceManage::getInstance().getDevice(m_serial)) {
+        switchFullScreen();
+    }
 
+    if (isMaximized()) {
+        showNormal();
+    }
+
+    if (m_skin) {
+        QMargins m = getMargins(vertical);
+        showSize.setWidth(showSize.width() + m.left() + m.right());
+        showSize.setHeight(showSize.height() + m.top() + m.bottom());
+    }
+
+    if (showSize != size()) {
+        resize(showSize);
         if (m_skin) {
-            QMargins m = getMargins(vertical);
-            showSize.setWidth(showSize.width() + m.left() + m.right());
-            showSize.setHeight(showSize.height() + m.top() + m.bottom());
+            updateStyleSheet(vertical);
         }
-
-        if (showSize != size()) {
-            resize(showSize);
-            if (m_skin) {
-                updateStyleSheet(vertical);
-            }
-            moveCenter();
-        }
+        moveCenter();
     }
 }
 
@@ -758,6 +800,11 @@ void VideoForm::paintEvent(QPaintEvent *paint)
 void VideoForm::showEvent(QShowEvent *event)
 {
     Q_UNUSED(event)
+    if (m_embeddedMode) {
+        showToolForm(false);
+        return;
+    }
+    
     if (!isFullScreen() && this->show_toolbar) {
         QTimer::singleShot(500, this, [this](){
             showToolForm(this->show_toolbar);
@@ -768,6 +815,9 @@ void VideoForm::showEvent(QShowEvent *event)
 void VideoForm::resizeEvent(QResizeEvent *event)
 {
     Q_UNUSED(event)
+    if (m_embeddedMode) {
+        return;
+    }
     QSize goodSize = ui->keepRatioWidget->goodSize();
     if (goodSize.isEmpty()) {
         return;

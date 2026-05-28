@@ -12,8 +12,32 @@
 ToolForm::ToolForm(QWidget *adsorbWidget, AdsorbPositions adsorbPos) : MagneticWidget(adsorbWidget, adsorbPos), ui(new Ui::ToolForm)
 {
     ui->setupUi(this);
-    setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
-    //setWindowFlags(windowFlags() & ~Qt::WindowMinMaxButtonsHint);
+    setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::ToolTip);
+    setAttribute(Qt::WA_TranslucentBackground);
+    
+    // Modern Apple-style floating toolbar
+    setStyleSheet(R"(
+        #ToolForm {
+            background-color: rgba(20, 20, 25, 230);
+            border: 1px solid #333;
+            border-radius: 20px;
+        }
+        QPushButton {
+            background: transparent;
+            border: none;
+            color: #dcdcdc;
+            padding: 8px;
+            border-radius: 10px;
+        }
+        QPushButton:hover {
+            background-color: rgba(255, 107, 107, 40);
+            color: #ff6b6b;
+        }
+        #restoreBtn {
+            color: #ff6b6b;
+            font-weight: bold;
+        }
+    )");
 
     updateGroupControl();
 
@@ -37,6 +61,19 @@ bool ToolForm::isHost()
 
 void ToolForm::initStyle()
 {
+    // Add Restore Button at the top
+    QPushButton* restoreBtn = new QPushButton();
+    restoreBtn->setObjectName("restoreBtn");
+    restoreBtn->setToolTip(tr("Restore to wall"));
+    restoreBtn->setMinimumSize(30, 30);
+    IconHelper::Instance()->SetIcon(restoreBtn, QChar(0xf2d2), 15); // f2d2: window-restore
+    ui->verticalLayout->insertWidget(0, restoreBtn);
+    connect(restoreBtn, &QPushButton::clicked, this, [this](){
+        if (m_adsorbWidget) {
+            m_adsorbWidget->close();
+        }
+    });
+
     IconHelper::Instance()->SetIcon(ui->fullScreenBtn, QChar(0xf0b2), 15);
     IconHelper::Instance()->SetIcon(ui->menuBtn, QChar(0xf096), 15);
     IconHelper::Instance()->SetIcon(ui->homeBtn, QChar(0xf1db), 15);

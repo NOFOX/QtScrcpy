@@ -21,7 +21,7 @@ set old_cd=%cd%
 cd /d %~dp0
 
 :: 启动参数声明
-set cpu_mode=x86
+set cpu_mode=x64
 set build_mode=RelWithDebInfo
 set errno=1
 
@@ -32,35 +32,37 @@ echo check build param[Debug/Release/MinSizeRel/RelWithDebInfo]
 echo ---------------------------------------------------------------
 
 :: 编译参数检查
-if "%1"=="Debug" (    
+set "arg1=%~1"
+set "arg2=%~2"
+if /i "%arg1%"=="Debug" (
     goto build_mode_ok
 )
-if "%1"=="Release" (    
+if /i "%arg1%"=="Release" (
     goto build_mode_ok
 )
-if "%1"=="MinSizeRel" (    
+if /i "%arg1%"=="MinSizeRel" (
     goto build_mode_ok
 )
-if "%1"=="RelWithDebInfo" (
+if /i "%arg1%"=="RelWithDebInfo" (
     goto build_mode_ok
 )
 echo error: unknown build mode -- %1
 goto return
 :build_mode_ok
 
-set build_mode=%1
-set cmake_vs_build_mode=Win32
-set qt_cmake_path=%ENV_QT_PATH%\msvc2019\lib\cmake\Qt5
+set "build_mode=%arg1%"
+set cmake_vs_build_mode=x64
+set qt_cmake_path=%ENV_QT_PATH%\msvc2019_64
 
 if /i "%2"=="x86" (
     set cpu_mode=x86
     set cmake_vs_build_mode=Win32
-    set qt_cmake_path=%ENV_QT_PATH%\msvc2019\lib\cmake\Qt5
+    set qt_cmake_path=%ENV_QT_PATH%\msvc2019
 )
 if /i "%2"=="x64" (
     set cpu_mode=x64
     set cmake_vs_build_mode=x64
-    set qt_cmake_path=%ENV_QT_PATH%\msvc2019_64\lib\cmake\Qt5
+    set qt_cmake_path=%ENV_QT_PATH%\msvc2019_64
 )
 
 :: 提示

@@ -26,6 +26,7 @@ public:
     void updateShowSize(const QSize &newSize);
     void updateRender(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV, int linesizeY, int linesizeU, int linesizeV);
     void setSerial(const QString& serial);
+    QString getSerial();
     QRect getGrabCursorRect();
     const QSize &frameSize();
     void resizeSquare();
@@ -33,6 +34,8 @@ public:
     void showFPS(bool show);
     void switchFullScreen();
     bool isHost();
+    void setEmbeddedMode(bool embedded);
+    void showToolForm(bool show = true);
 
 private:
     void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV,
@@ -44,7 +47,6 @@ private:
     QMargins getMargins(bool vertical);
     void initUI();
 
-    void showToolForm(bool show = true);
     void moveCenter();
     void installShortcut();
     QRect getScreenRect();
@@ -87,6 +89,7 @@ private:
 
     //Whether to display the toolbar when connecting a device.
     bool show_toolbar = true;
+    bool m_embeddedMode = false;
 };
 
 #endif // VIDEOFORM_H

@@ -8,13 +8,14 @@
 #include <QSystemTrayIcon>
 #include <QListWidget>
 #include <QTimer>
-#include <QStackedWidget>
 
+class QGridLayout;
+class QComboBox;
+class QPushButton;
 
 #include "adbprocess.h"
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
 #include "audio/audiooutput.h"
-#include "phonewall.h"
 
 namespace Ui
 {
@@ -70,10 +71,8 @@ private slots:
     void on_autoUpdatecheckBox_toggled(bool checked);
 
     void showIpEditMenu(const QPoint &pos);
-
-    void onDeviceClicked(int deviceId);
-    void onDeviceDoubleClicked(int deviceId);
-    void onToggleModeBtn_clicked();
+    void onPhoneSlotClicked();
+    void onPhoneWallCountChanged(const QString &count);
 
 private:
     bool checkAdbRun();
@@ -92,12 +91,17 @@ private:
     void savePortHistory(const QString &port);
 
     void showPortEditMenu(const QPoint &pos);
+    void createPhoneWall();
 
-    void setupPhoneWallMode();
-    void setupClassicMode();
+    int findPhoneSlot(const QString &serial) const;
+    int findEmptyPhoneSlot() const;
+    void updatePhoneSlot(int index, const QString &serial, const QString &deviceName, bool online);
+    void clearPhoneSlot(int index);
+    void refreshPhoneWallSlots();
 
 protected:
     void closeEvent(QCloseEvent *event);
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     Ui::Widget *ui;
@@ -108,10 +112,14 @@ private:
     QAction *m_quit;
     AudioOutput m_audioOutput;
     QTimer m_autoUpdatetimer;
-    
-    PhoneWall *m_phoneWall;
-    QStackedWidget *m_mainStack;
-    bool m_phoneWallMode;
+
+    class QGroupBox *m_phoneWallGroupBox = nullptr;
+    QWidget *m_phoneWallContainer = nullptr;
+    QGridLayout *m_phoneWallGrid = nullptr;
+    QComboBox *m_phoneCountBox = nullptr;
+    QVector<QFrame*> m_phoneSlotWidgets;
+    QVector<QString> m_phoneSlotSerials;
+    int m_phoneWallCount = 24;
 };
 
 #endif // DIALOG_H
