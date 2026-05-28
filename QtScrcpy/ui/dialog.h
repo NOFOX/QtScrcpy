@@ -1,4 +1,4 @@
-﻿#ifndef DIALOG_H
+#ifndef DIALOG_H
 #define DIALOG_H
 
 #include <QWidget>
@@ -8,10 +8,17 @@
 #include <QSystemTrayIcon>
 #include <QListWidget>
 #include <QTimer>
+#include <QTreeWidget>
+#include <QLineEdit>
+#include <QProcess>
+#include <QTextEdit>
 
 class QGridLayout;
 class QComboBox;
 class QPushButton;
+class QGroupBox;
+class QFrame;
+class QVBoxLayout;
 
 #include "adbprocess.h"
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
@@ -21,6 +28,15 @@ namespace Ui
 {
     class Widget;
 }
+
+struct DeviceInfo {
+    QString serial;
+    QString deviceName;
+    QString alias;
+    QString group;
+    QString ip;
+    bool online = false;
+};
 
 class QYUVOpenGLWidget;
 class Dialog : public QWidget
@@ -74,6 +90,22 @@ private slots:
     void onPhoneSlotClicked();
     void onPhoneWallCountChanged(const QString &count);
 
+    // Window control slots
+    void onMinimize();
+    void onMaximize();
+    void onClose();
+
+    // Sidebar slots
+    void onToggleSidebar();
+    void onScanDevices();
+    void onFilterChanged();
+    void onDeviceTreeDoubleClicked(QTreeWidgetItem *item, int column);
+    void onTerminalCommandEntered();
+    void readTerminalOutput();
+    void onDeviceTreeContextMenu(const QPoint &pos);
+    void onEditAlias();
+    void onEditGroup();
+
 private:
     bool checkAdbRun();
     void initUI();
@@ -92,12 +124,14 @@ private:
 
     void showPortEditMenu(const QPoint &pos);
     void createPhoneWall();
+    void createSidebar();
 
     int findPhoneSlot(const QString &serial) const;
     int findEmptyPhoneSlot() const;
     void updatePhoneSlot(int index, const QString &serial, const QString &deviceName, bool online);
     void clearPhoneSlot(int index);
     void refreshPhoneWallSlots();
+    void updateDeviceTree();
 
 protected:
     void closeEvent(QCloseEvent *event);
@@ -113,13 +147,30 @@ private:
     AudioOutput m_audioOutput;
     QTimer m_autoUpdatetimer;
 
-    class QGroupBox *m_phoneWallGroupBox = nullptr;
+    // Phone Wall
+    QGroupBox *m_phoneWallGroupBox = nullptr;
     QWidget *m_phoneWallContainer = nullptr;
     QGridLayout *m_phoneWallGrid = nullptr;
     QComboBox *m_phoneCountBox = nullptr;
     QVector<QFrame*> m_phoneSlotWidgets;
     QVector<QString> m_phoneSlotSerials;
     int m_phoneWallCount = 24;
+
+    // Sidebar
+    QWidget *m_sidePanel = nullptr;
+    QPushButton *m_expandBtn = nullptr;
+    QTreeWidget *m_deviceTree = nullptr;
+    QLineEdit *m_filterEdit = nullptr;
+    QTextEdit *m_terminalOutput = nullptr;
+    QLineEdit *m_terminalInput = nullptr;
+    QProcess *m_powershell = nullptr;
+
+    QMap<QString, DeviceInfo> m_devices; // serial -> info
+
+    // Drag move
+    QPoint m_dragPosition;
+    bool m_isDragging = false;
+    QWidget *m_titleBar = nullptr;
 };
 
 #endif // DIALOG_H

@@ -5,6 +5,7 @@
 #include <QRandomGenerator>
 #include <QTime>
 #include <QTimer>
+#include <QMouseEvent>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QComboBox>
@@ -15,6 +16,9 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QVBoxLayout>
+#include <QInputDialog>
+#include <QMenu>
+#include <QHeaderView>
 
 #include "config.h"
 #include "dialog.h"
@@ -46,6 +50,20 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
     initUI();
 
     updateBootConfig(true);
+
+    // Create PowerShell process
+    m_powershell = new QProcess(this);
+    m_powershell->setProcessChannelMode(QProcess::MergedChannels);
+    connect(m_powershell, &QProcess::readyReadStandardOutput, this, &Dialog::readTerminalOutput);
+    
+    // Improved PowerShell startup: start without command, then send init strings
+    connect(m_powershell, &QProcess::started, this, [this]() {
+        m_powershell->write("chcp 65001\r\n");
+        m_powershell->write("function prompt { 'PS> ' }\r\n");
+        m_powershell->write("cls\r\n");
+    });
+    
+    m_powershell->start("powershell.exe", QStringList() << "-NoLogo" << "-NoExit");
 
     on_updateDevice_clicked();
 
@@ -81,16 +99,45 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
                 QStringList devices = m_adb.getDevicesSerialFromStdOut();
                 ui->serialBox->clear();
                 ui->connectedPhoneList->clear();
+                
+                // Update m_devices and tree
                 for (auto &item : devices) {
                     ui->serialBox->addItem(item);
                     ui->connectedPhoneList->addItem(Config::getInstance().getNickName(item) + "-" + item);
                     
+                    if (!m_devices.contains(item)) {
+                        DeviceInfo info;
+                        info.serial = item;
+                        info.online = true;
+                        
+                        // Default alias logic
+                        QString savedAlias = Config::getInstance().getNickName(item);
+                        if (!savedAlias.isEmpty() && savedAlias != "Phone") {
+                            info.alias = savedAlias;
+                        } else {
+                            QStringList parts = item.split(":");
+                            QString ipPart = parts.first();
+                            QStringList segments = ipPart.split(".");
+                            if (segments.size() == 4) {
+                                info.alias = segments.last();
+                                Config::getInstance().setNickName(item, info.alias);
+                            } else {
+                                info.alias = "Phone";
+                            }
+                        }
+                        m_devices[item] = info;
+                    } else {
+                        m_devices[item].online = true;
+                    }
+
                     // Auto-start mirroring if not already connected
                     if (!qsc::IDeviceManage::getInstance().getDevice(item)) {
                         ui->serialBox->setCurrentText(item);
                         on_startServerBtn_clicked();
                     }
                 }
+                updateDeviceTree();
+                onFilterChanged();
             } else if (args.contains("show") && args.contains("wlan0")) {
                 QString ip = m_adb.getDeviceIPFromStdOut();
                 if (ip.isEmpty()) {
@@ -98,6 +145,11 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
                     break;
                 }
                 ui->deviceIpEdt->setEditText(ip);
+                QString serial = ui->serialBox->currentText();
+                if (m_devices.contains(serial)) {
+                    m_devices[serial].ip = ip;
+                    updateDeviceTree();
+                }
             } else if (args.contains("ifconfig") && args.contains("wlan0")) {
                 QString ip = m_adb.getDeviceIPFromStdOut();
                 if (ip.isEmpty()) {
@@ -105,6 +157,11 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
                     break;
                 }
                 ui->deviceIpEdt->setEditText(ip);
+                QString serial = ui->serialBox->currentText();
+                if (m_devices.contains(serial)) {
+                    m_devices[serial].ip = ip;
+                    updateDeviceTree();
+                }
             } else if (args.contains("ip -o a")) {
                 QString ip = m_adb.getDeviceIPByIpFromStdOut();
                 if (ip.isEmpty()) {
@@ -112,6 +169,11 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
                     break;
                 }
                 ui->deviceIpEdt->setEditText(ip);
+                QString serial = ui->serialBox->currentText();
+                if (m_devices.contains(serial)) {
+                    m_devices[serial].ip = ip;
+                    updateDeviceTree();
+                }
             }
             break;
         }
@@ -145,6 +207,10 @@ Dialog::Dialog(QWidget *parent) : QWidget(parent), ui(new Ui::Widget)
 Dialog::~Dialog()
 {
     qDebug() << "~Dialog()";
+    if (m_powershell) {
+        m_powershell->terminate();
+        m_powershell->waitForFinished();
+    }
     updateBootConfig(false);
     qsc::IDeviceManage::getInstance().disconnectAllDevice();
     delete ui;
@@ -153,7 +219,8 @@ Dialog::~Dialog()
 void Dialog::initUI()
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    
+    setWindowFlags(Qt::FramelessWindowHint | Qt::WindowMinMaxButtonsHint);
+
     // Remove margins for the main layout to let phone wall take full space
     if (layout()) {
         layout()->setContentsMargins(0, 0, 0, 0);
@@ -226,6 +293,76 @@ void Dialog::initUI()
     createPhoneWall();
 }
 
+void Dialog::createSidebar()
+{
+    m_sidePanel = new QWidget();
+    m_sidePanel->setObjectName("sidePanel");
+    m_sidePanel->setStyleSheet("background-color: #1a1a28; border-right: 1px solid #2a2a38;");
+    m_sidePanel->hide();
+
+    auto *mainLayout = new QVBoxLayout(m_sidePanel);
+    mainLayout->setContentsMargins(5, 5, 5, 5);
+    mainLayout->setSpacing(10);
+
+    // --- Part A: Device Management ---
+    auto *deviceGroup = new QGroupBox(tr("Device Management"));
+    deviceGroup->setStyleSheet("color: #e0e0e0; font-weight: bold;");
+    auto *devLayout = new QVBoxLayout(deviceGroup);
+
+    // Filter
+    m_filterEdit = new QLineEdit();
+    m_filterEdit->setPlaceholderText(tr("Filter (Group/Alias/IP)..."));
+    m_filterEdit->setStyleSheet("background: #16161e; color: #ccc; border: 1px solid #2a2a38; padding: 4px;");
+    connect(m_filterEdit, &QLineEdit::textChanged, this, &Dialog::onFilterChanged);
+    devLayout->addWidget(m_filterEdit);
+
+    // Device Tree
+    m_deviceTree = new QTreeWidget();
+    m_deviceTree->setHeaderLabels(QStringList() << tr("Device") << tr("Group") << tr("Status"));
+    m_deviceTree->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_deviceTree->setStyleSheet("QTreeWidget { background: #16161e; color: #ccc; border: none; }"
+                               "QTreeWidget::item:selected { background: #ff6b6b; color: white; }");
+    
+    // Adjust column widths
+    m_deviceTree->header()->setStretchLastSection(false);
+    m_deviceTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_deviceTree->header()->setSectionResizeMode(1, QHeaderView::Interactive);
+    m_deviceTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    m_deviceTree->setColumnWidth(1, 60);
+
+    connect(m_deviceTree, &QTreeWidget::itemDoubleClicked, this, &Dialog::onDeviceTreeDoubleClicked);
+    connect(m_deviceTree, &QTreeWidget::customContextMenuRequested, this, &Dialog::onDeviceTreeContextMenu);
+    devLayout->addWidget(m_deviceTree);
+
+    // Scan Button
+    auto *scanBtn = new QPushButton(tr("Scan Devices"));
+    scanBtn->setStyleSheet("background: #ff6b6b; color: white; font-weight: bold; padding: 8px; border-radius: 4px;");
+    connect(scanBtn, &QPushButton::clicked, this, &Dialog::onScanDevices);
+    devLayout->addWidget(scanBtn);
+
+    mainLayout->addWidget(deviceGroup, 3);
+
+    // --- Part B: Terminal ---
+    auto *termGroup = new QGroupBox(tr("PowerShell Terminal"));
+    termGroup->setStyleSheet("color: #e0e0e0; font-weight: bold;");
+    auto *termLayout = new QVBoxLayout(termGroup);
+
+    m_terminalOutput = new QTextEdit();
+    m_terminalOutput->setReadOnly(true);
+    m_terminalOutput->setStyleSheet("background: #0c0c0c; color: #00ff00; font-family: 'Consolas', monospace; font-size: 10pt;");
+    m_terminalOutput->installEventFilter(this); // Click to focus input
+    termLayout->addWidget(m_terminalOutput);
+
+    m_terminalInput = new QLineEdit();
+    m_terminalInput->setPlaceholderText(tr("Type PowerShell command here..."));
+    m_terminalInput->setStyleSheet("QLineEdit { background: #16161e; color: #00ff00; border: 1px solid #ff6b6b; border-radius: 4px; padding: 4px; font-family: 'Consolas', monospace; }"
+                                  "QLineEdit:focus { border-color: #ff8e8e; }");
+    connect(m_terminalInput, &QLineEdit::returnPressed, this, &Dialog::onTerminalCommandEntered);
+    termLayout->addWidget(m_terminalInput);
+
+    mainLayout->addWidget(termGroup, 2);
+}
+
 void Dialog::createPhoneWall()
 {
     if (!ui || !ui->rightWidget) {
@@ -233,35 +370,98 @@ void Dialog::createPhoneWall()
         return;
     }
 
-    // 获取或创建rightWidget的布局
-    QBoxLayout *rightLayout = qobject_cast<QVBoxLayout *>(ui->rightWidget->layout());
-    if (!rightLayout) {
-        qWarning() << "rightWidget has no layout or wrong type, creating new QVBoxLayout";
-        rightLayout = new QVBoxLayout(ui->rightWidget);
-        ui->rightWidget->setLayout(rightLayout);
+    // Hide all existing widgets in rightWidget instead of deleting them or the layout
+    QList<QWidget*> children = ui->rightWidget->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+    for (QWidget* child : children) {
+        child->hide();
     }
 
+    // If rightWidget already has a layout, we'll just add our new structure to it
+    // or replace it if it's not a QHBoxLayout
+    QLayout *existingLayout = ui->rightWidget->layout();
+    QHBoxLayout *mainHorizontalLayout = qobject_cast<QHBoxLayout*>(existingLayout);
+    
+    if (!mainHorizontalLayout) {
+        if (existingLayout) {
+            // Remove existing layout but DON'T delete the widgets it managed (they are hidden)
+            delete existingLayout;
+        }
+        mainHorizontalLayout = new QHBoxLayout(ui->rightWidget);
+        mainHorizontalLayout->setContentsMargins(0, 0, 0, 0);
+        mainHorizontalLayout->setSpacing(0);
+    } else {
+        // Clear existing items from the layout
+        QLayoutItem *item;
+        while ((item = mainHorizontalLayout->takeAt(0)) != nullptr) {
+            delete item;
+        }
+    }
+
+    m_phoneSlotWidgets.clear();
+
+    // Create Sidebar
+    createSidebar();
+    mainHorizontalLayout->addWidget(m_sidePanel, 1);
+
+    // Create Toggle Button
+    m_expandBtn = new QPushButton(">");
+    m_expandBtn->setFixedSize(20, 60);
+    m_expandBtn->setStyleSheet("QPushButton { background: #2a2a38; color: #ff6b6b; border: 1px solid #3a3a48; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }"
+                              "QPushButton:hover { background: #3a3a48; }");
+    connect(m_expandBtn, &QPushButton::clicked, this, &Dialog::onToggleSidebar);
+    mainHorizontalLayout->addWidget(m_expandBtn, 0, Qt::AlignVCenter);
+
+    // Phone Wall Group Box
     m_phoneWallGroupBox = new QGroupBox(tr("Phone Wall"));
     m_phoneWallGroupBox->setObjectName("phoneWallGroupBox");
     m_phoneWallGroupBox->setMinimumHeight(250);
-    // Remove maximum height to allow it to fill the maximized window
     m_phoneWallGroupBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    mainHorizontalLayout->addWidget(m_phoneWallGroupBox, 4); // Stretch factor 4
     
     auto *wrapperLayout = new QVBoxLayout(m_phoneWallGroupBox);
     wrapperLayout->setContentsMargins(8, 8, 8, 8);
     wrapperLayout->setSpacing(6);
 
-    // 创建标题栏 (精简：仅保留标题)
-    auto *header = new QWidget();
-    auto *headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(0, 0, 0, 0);
-    headerLayout->setSpacing(10);
-    
-    auto *brandLabel = new QLabel(tr("PHONES (8x3 Grid)"));
-    brandLabel->setStyleSheet("font-weight: 700; color: #ff6b6b; font-size: 14px;");
-    headerLayout->addWidget(brandLabel);
-    headerLayout->addStretch();
-    wrapperLayout->addWidget(header);
+    // --- Custom Title Bar Row ---
+    m_titleBar = new QWidget();
+    m_titleBar->setFixedHeight(30);
+    m_titleBar->setStyleSheet("background: transparent;");
+    auto *titleLayout = new QHBoxLayout(m_titleBar);
+    titleLayout->setContentsMargins(0, 0, 0, 0);
+    titleLayout->setSpacing(10);
+
+    auto *titleLabel = new QLabel(tr("Phone Wall"));
+    titleLabel->setStyleSheet("color: #e0e0e0; font-weight: bold; font-size: 14px;");
+    titleLayout->addWidget(titleLabel);
+    titleLayout->addStretch();
+
+    // Minimize Button
+    auto *minBtn = new QPushButton("—");
+    minBtn->setFixedSize(30, 30);
+    minBtn->setStyleSheet("QPushButton { color: #ccc; border: none; background: transparent; font-size: 14px; }"
+                         "QPushButton:hover { background: #3a3a48; color: white; }");
+    connect(minBtn, &QPushButton::clicked, this, &Dialog::onMinimize);
+    titleLayout->addWidget(minBtn);
+
+    // Maximize/Restore Button
+    auto *maxBtn = new QPushButton("▢");
+    maxBtn->setFixedSize(30, 30);
+    maxBtn->setStyleSheet("QPushButton { color: #ccc; border: none; background: transparent; font-size: 16px; }"
+                         "QPushButton:hover { background: #3a3a48; color: white; }");
+    connect(maxBtn, &QPushButton::clicked, this, &Dialog::onMaximize);
+    titleLayout->addWidget(maxBtn);
+
+    // Close Button
+    auto *closeBtn = new QPushButton("✕");
+    closeBtn->setFixedSize(30, 30);
+    closeBtn->setStyleSheet("QPushButton { color: #ccc; border: none; background: transparent; font-size: 16px; }"
+                           "QPushButton:hover { background: #ff4d4d; color: white; }");
+    connect(closeBtn, &QPushButton::clicked, this, &Dialog::onClose);
+    titleLayout->addWidget(closeBtn);
+
+    m_titleBar->installEventFilter(this);
+    wrapperLayout->addWidget(m_titleBar);
+    m_phoneWallGroupBox->setTitle(""); // Remove default title text since we have custom one
 
     // 创建滚动区域
     auto *scrollArea = new QScrollArea();
@@ -276,7 +476,7 @@ void Dialog::createPhoneWall()
     m_phoneWallGrid->setSpacing(8);
     m_phoneWallGrid->setContentsMargins(4, 4, 4, 4);
 
-    // 强制设置8列等宽，防止某个槽位变宽撑开布局
+    // 强制设置8列等宽
     for (int i = 0; i < 8; ++i) {
         m_phoneWallGrid->setColumnStretch(i, 1);
         m_phoneWallGrid->setColumnMinimumWidth(i, 0);
@@ -289,7 +489,7 @@ void Dialog::createPhoneWall()
     for (int i = 0; i < 24; ++i) {
         auto *slotFrame = new QFrame();
         slotFrame->setObjectName(QStringLiteral("phoneSlot%1").arg(i));
-        slotFrame->setMinimumHeight(150); // 增加高度以容纳预览
+        slotFrame->setMinimumHeight(150);
         slotFrame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         slotFrame->setStyleSheet(
             "QFrame {"
@@ -311,7 +511,7 @@ void Dialog::createPhoneWall()
         slotLayout->addWidget(statusLabel);
         
         slotFrame->setProperty("slotIndex", i);
-        slotFrame->installEventFilter(this); // 用于检测双击
+        slotFrame->installEventFilter(this);
         
         m_phoneSlotWidgets.append(slotFrame);
         m_phoneWallGrid->addWidget(slotFrame, i / 8, i % 8);
@@ -320,10 +520,225 @@ void Dialog::createPhoneWall()
     scrollArea->setWidget(m_phoneWallContainer);
     wrapperLayout->addWidget(scrollArea, 1);
 
-    // 添加手机墙到右侧面板最顶部
-    rightLayout->insertWidget(0, m_phoneWallGroupBox, 1);
-    
     m_phoneWallCount = 24;
+    
+    // Trigger initial filter to ensure correct visibility
+    onFilterChanged();
+}
+
+void Dialog::onToggleSidebar()
+{
+    if (m_sidePanel->isHidden()) {
+        m_sidePanel->show();
+        m_expandBtn->setText("<");
+    } else {
+        m_sidePanel->hide();
+        m_expandBtn->setText(">");
+    }
+}
+
+void Dialog::onScanDevices()
+{
+    on_updateDevice_clicked();
+}
+
+void Dialog::onFilterChanged()
+{
+    if (!m_filterEdit) return;
+    QString filter = m_filterEdit->text().trimmed().toLower();
+    
+    // Update Phone Wall slots visibility
+    for (int i = 0; i < m_phoneSlotWidgets.size(); ++i) {
+        if (i >= m_phoneSlotSerials.size()) break;
+        QString serial = m_phoneSlotSerials.at(i);
+        if (serial.isEmpty()) {
+            m_phoneSlotWidgets[i]->setVisible(filter.isEmpty());
+            continue;
+        }
+
+        DeviceInfo info = m_devices.value(serial);
+        bool match = filter.isEmpty() || 
+                     info.alias.toLower().contains(filter) || 
+                     info.group.toLower().contains(filter) || 
+                     info.ip.contains(filter) ||
+                     serial.toLower().contains(filter);
+        
+        m_phoneSlotWidgets[i]->setVisible(match);
+    }
+
+    // Update Tree Widget items visibility
+    for (int i = 0; i < m_deviceTree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem *groupItem = m_deviceTree->topLevelItem(i);
+        bool groupHasVisibleChild = false;
+        
+        for (int j = 0; j < groupItem->childCount(); ++j) {
+            QTreeWidgetItem *devItem = groupItem->child(j);
+            QString serial = devItem->data(0, Qt::UserRole).toString();
+            DeviceInfo info = m_devices.value(serial);
+            
+            bool match = filter.isEmpty() || 
+                         info.alias.toLower().contains(filter) || 
+                         info.group.toLower().contains(filter) || 
+                         info.ip.contains(filter) ||
+                         serial.toLower().contains(filter);
+            
+            devItem->setHidden(!match);
+            if (match) groupHasVisibleChild = true;
+        }
+        
+        // Hide group if no children are visible
+        groupItem->setHidden(!groupHasVisibleChild && !filter.isEmpty());
+    }
+}
+
+void Dialog::onDeviceTreeDoubleClicked(QTreeWidgetItem *item, int column)
+{
+    Q_UNUSED(column);
+    QString serial = item->data(0, Qt::UserRole).toString();
+    if (serial.isEmpty()) return;
+
+    int slotIndex = findPhoneSlot(serial);
+    if (slotIndex != -1) {
+        // Highlight or scroll to slot
+        auto *frame = m_phoneSlotWidgets[slotIndex];
+        frame->setFocus();
+        frame->setStyleSheet(frame->styleSheet() + "border-color: #ff6b6b; border-width: 4px;");
+        QTimer::singleShot(1000, this, [this, slotIndex]() {
+            if (slotIndex < m_phoneSlotWidgets.size()) {
+                m_phoneSlotWidgets[slotIndex]->setStyleSheet(
+                    "QFrame {"
+                    "background: #16161e;"
+                    "border: 2px solid #222230;"
+                    "border-radius: 0px;"
+                    "}"
+                    "QFrame:hover {"
+                    "border-color: #ff6b6b;"
+                    "}");
+            }
+        });
+    }
+}
+
+void Dialog::onTerminalCommandEntered()
+{
+    QString cmd = m_terminalInput->text().trimmed();
+    if (cmd.isEmpty()) return;
+
+    if (m_powershell->state() != QProcess::Running) {
+        m_terminalOutput->append("<font color='red'>PowerShell is not running, restarting...</font>");
+        connect(m_powershell, &QProcess::started, this, [this]() {
+            m_powershell->write("chcp 65001\r\n");
+            m_powershell->write("function prompt { 'PS> ' }\r\n");
+            m_powershell->write("cls\r\n");
+        }, Qt::SingleShotConnection);
+        m_powershell->start("powershell.exe", QStringList() << "-NoLogo" << "-NoExit");
+        if (!m_powershell->waitForStarted()) {
+            m_terminalOutput->append("<font color='red'>Failed to start PowerShell.</font>");
+            return;
+        }
+    }
+
+    m_terminalOutput->append("<font color='#ff6b6b'>> " + cmd + "</font>");
+    m_powershell->write(cmd.toUtf8() + "\r\n");
+    m_terminalInput->clear();
+}
+
+void Dialog::readTerminalOutput()
+{
+    m_terminalOutput->append(QString::fromUtf8(m_powershell->readAllStandardOutput()));
+    // Scroll to bottom
+    m_terminalOutput->moveCursor(QTextCursor::End);
+}
+
+void Dialog::onDeviceTreeContextMenu(const QPoint &pos)
+{
+    QTreeWidgetItem *item = m_deviceTree->itemAt(pos);
+    if (!item || item->data(0, Qt::UserRole).toString().isEmpty()) return;
+
+    QMenu menu(this);
+    menu.addAction(tr("Edit Alias"), this, &Dialog::onEditAlias);
+    menu.addAction(tr("Edit Group"), this, &Dialog::onEditGroup);
+    menu.exec(m_deviceTree->mapToGlobal(pos));
+}
+
+void Dialog::onEditAlias()
+{
+    QTreeWidgetItem *item = m_deviceTree->currentItem();
+    if (!item) return;
+
+    QString serial = item->data(0, Qt::UserRole).toString();
+    DeviceInfo &info = m_devices[serial];
+
+    bool ok;
+    QString newAlias = QInputDialog::getText(this, tr("Edit Alias"),
+                                         tr("Alias:"), QLineEdit::Normal,
+                                         info.alias, &ok);
+    if (ok && !newAlias.isEmpty()) {
+        info.alias = newAlias;
+        Config::getInstance().setNickName(serial, newAlias);
+        updateDeviceTree();
+        onFilterChanged();
+    }
+}
+
+void Dialog::onEditGroup()
+{
+    QTreeWidgetItem *item = m_deviceTree->currentItem();
+    if (!item) return;
+
+    QString serial = item->data(0, Qt::UserRole).toString();
+    DeviceInfo &info = m_devices[serial];
+
+    bool ok;
+    QString newGroup = QInputDialog::getText(this, tr("Edit Group"),
+                                         tr("Group:"), QLineEdit::Normal,
+                                         info.group, &ok);
+    if (ok) {
+        info.group = newGroup;
+        updateDeviceTree();
+        onFilterChanged();
+    }
+}
+
+void Dialog::updateDeviceTree()
+{
+    if (!m_deviceTree) return;
+    m_deviceTree->clear();
+    
+    // Group by group name
+    QMap<QString, QList<DeviceInfo>> groups;
+    for (const auto &info : m_devices) {
+        groups[info.group].append(info);
+    }
+
+    for (auto it = groups.begin(); it != groups.end(); ++it) {
+        auto *groupItem = new QTreeWidgetItem(m_deviceTree);
+        groupItem->setText(0, it.key().isEmpty() ? tr("Default Group") : it.key());
+        groupItem->setExpanded(true);
+
+        for (const auto &info : it.value()) {
+            auto *devItem = new QTreeWidgetItem(groupItem);
+            
+            // Format: Alias(PORT)
+            QString alias = info.alias.isEmpty() ? "Phone" : info.alias;
+            QString port = "USB";
+            if (info.serial.contains(":")) {
+                port = info.serial.split(":").last();
+            }
+            QString label = QString("%1(%2)").arg(alias).arg(port);
+            
+            devItem->setText(0, label);
+            devItem->setText(1, info.group);
+            devItem->setText(2, info.online ? tr("Online") : tr("Offline"));
+            devItem->setData(0, Qt::UserRole, info.serial);
+            
+            if (info.online) {
+                devItem->setForeground(2, QBrush(Qt::green));
+            } else {
+                devItem->setForeground(2, QBrush(Qt::red));
+            }
+        }
+    }
 }
 
 int Dialog::findPhoneSlot(const QString &serial) const
@@ -444,8 +859,50 @@ void Dialog::onPhoneWallCountChanged(const QString &count)
     refreshPhoneWallSlots();
 }
 
+void Dialog::onMinimize()
+{
+    showMinimized();
+}
+
+void Dialog::onMaximize()
+{
+    if (isMaximized()) {
+        showNormal();
+    } else {
+        showMaximized();
+    }
+}
+
+void Dialog::onClose()
+{
+    close();
+}
+
 bool Dialog::eventFilter(QObject *watched, QEvent *event)
 {
+    // Handle window dragging via custom title bar
+    if (watched == m_titleBar) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                m_isDragging = true;
+                m_dragPosition = mouseEvent->globalPosition().toPoint() - frameGeometry().topLeft();
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseMove && m_isDragging) {
+            auto *mouseEvent = static_cast<QMouseEvent*>(event);
+            move(mouseEvent->globalPosition().toPoint() - m_dragPosition);
+            return true;
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            m_isDragging = false;
+            return true;
+        }
+    }
+
+    if (watched == m_terminalOutput && event->type() == QEvent::MouseButtonPress) {
+        if (m_terminalInput) m_terminalInput->setFocus();
+    }
+
     if (event->type() == QEvent::MouseButtonDblClick) {
         VideoForm *vf = qobject_cast<VideoForm*>(watched);
         if (!vf) {
@@ -835,10 +1292,40 @@ void Dialog::getIPbyIp()
 
 void Dialog::onDeviceConnected(bool success, const QString &serial, const QString &deviceName, const QSize &size)
 {
-    Q_UNUSED(deviceName);
     if (!success) {
         return;
     }
+
+    // Update local device info
+    DeviceInfo info = m_devices.value(serial);
+    info.serial = serial;
+    info.deviceName = deviceName;
+    info.online = true;
+    
+    // Default alias logic: 4th segment of IP if it's a network device
+    if (info.alias.isEmpty()) {
+        QString savedAlias = Config::getInstance().getNickName(serial);
+        if (!savedAlias.isEmpty() && savedAlias != "Phone") {
+            info.alias = savedAlias;
+        } else {
+            // Try to extract IP segments
+            QStringList parts = serial.split(":");
+            QString ipPart = parts.first();
+            QStringList segments = ipPart.split(".");
+            if (segments.size() == 4) {
+                info.alias = segments.last();
+                Config::getInstance().setNickName(serial, info.alias);
+            } else {
+                info.alias = deviceName.isEmpty() ? "Phone" : deviceName;
+            }
+        }
+    }
+    
+    if (info.group.isEmpty()) info.group = ""; // Default group
+    m_devices[serial] = info;
+    updateDeviceTree();
+    onFilterChanged(); // Ensure new device respects current filter
+
     auto videoForm = new VideoForm(ui->framelessCheck->isChecked(), Config::getInstance().getSkin(), ui->showToolbar->isChecked());
     videoForm->setSerial(serial);
 
@@ -894,6 +1381,13 @@ void Dialog::onDeviceConnected(bool success, const QString &serial, const QStrin
 
 void Dialog::onDeviceDisconnected(QString serial)
 {
+    // Update local device info
+    if (m_devices.contains(serial)) {
+        m_devices[serial].online = false;
+        updateDeviceTree();
+        onFilterChanged();
+    }
+
     GroupController::instance().removeDevice(serial);
     auto device = qsc::IDeviceManage::getInstance().getDevice(serial);
     if (!device) {
